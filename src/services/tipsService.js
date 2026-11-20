@@ -1,7 +1,7 @@
 const { db, admin } = require("../config/firebase");
 const { Timestamp } = require("firebase-admin/firestore");
 
-const COLLECTION = "tips";
+const COLLECTION = "games";
 
 /**
  * Normalize a raw tip payload coming from the client.
