@@ -20,6 +20,7 @@ function normalizeTip(input = {}) {
     won: String(input.won ?? "").trim(),
     premium: Boolean(input.premium),
     results: String(input.results ?? "").trim(),
+    type: String(input.type ?? "1X2").trim(),
     id: String(input.id ?? "").trim(),
   };
 }
@@ -28,6 +29,7 @@ function normalizeTip(input = {}) {
 function validateTip(tip) {
   const errors = [];
   if (!tip.id) errors.push("id is required");
+  if (!tip.type) errors.push("type is required");
   if (!tip.home) errors.push("home is required");
   if (!tip.away) errors.push("away is required");
   if (!tip.odd) errors.push("odd is required");
