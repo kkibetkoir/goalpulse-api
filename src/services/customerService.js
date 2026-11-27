@@ -1,5 +1,6 @@
-const { db, admin } = require("../config/firebase");
+const { db, admin, auth  } = require("../config/firebase");
 const { Timestamp } = require("firebase-admin/firestore");
+const fs = require("fs");
 
 const COLLECTION = "users";
 
@@ -36,6 +37,117 @@ async function listCustomers({ tier, limit = 50 } = {}) {
 
   const snapshot = await query.get();
   return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
+async function appendNewEmailsToCsv() {
+  const filePath = "user-emails.csv";
+
+  try {
+    // 1. Load existing emails into a Set for fast lookup
+    const existingEmails = new Set();
+
+    if (fs.existsSync(filePath)) {
+      const fileContent = fs.readFileSync(filePath, "utf8");
+      fileContent
+        .split(/\r?\n/) // Split by newline (handles Windows & Mac/Linux)
+        .map((line) => line.trim())
+        .filter((line) => line && line !== "email") // Skip empty lines and header
+        .forEach((email) => existingEmails.add(email));
+    } else {
+      // Create the file with the header if it doesn't exist yet
+      fs.writeFileSync(filePath, "email\n", "utf8");
+    }
+
+    // 2. Fetch all document IDs from Firestore
+    //const docRefs = await db.collection(COLLECTION).listDocuments();
+    //const fetchedEmails = docRefs.map((doc) => doc.id);
+    
+    // 2. Fetch all documents from Firestore
+    const snapshot = await db.collection("contacts").get();
+    const fetchedEmails = snapshot.docs
+      .map((doc) => doc.data().email)
+      .filter(Boolean);
+
+    // 3. Filter out any emails that already exist in the CSV
+    const newEmails = fetchedEmails.filter(
+      (email) => !existingEmails.has(email),
+    );
+
+    if (newEmails.length === 0) {
+      console.log("No new emails to add.");
+      return;
+    }
+
+    // 4. Append only the new emails to the bottom of the CSV
+    const rowsToAppend = newEmails.join("\n") + "\n";
+    fs.appendFileSync(filePath, rowsToAppend, "utf8");
+
+    console.log(`Added ${newEmails.length} new emails to ${filePath}.`);
+  } catch (error) {
+    console.error("Error updating CSV:", error);
+  }
+}
+
+async function deleteAllUsers(nextPageToken) {
+  try {
+    // Fetch up to 1,000 users at a time
+    const listUsersResult = await auth.listUsers(1000, nextPageToken); //await admin.auth().listUsers(1000, nextPageToken);
+    const uids = listUsersResult.users.map((userRecord) => userRecord.uid);
+
+    if (uids.length > 0) {
+      const deleteResult = await auth.deleteUsers(uids); //await admin.auth().deleteUsers(uids);
+      console.log(`Successfully deleted ${deleteResult.successCount} users.`);
+      if (deleteResult.failureCount > 0) {
+        console.error(
+          `Failed to delete ${deleteResult.failureCount} users:`,
+          deleteResult.errors,
+        );
+      }
+    } else {
+      console.log("No users found to delete.");
+    }
+
+    // Recursively delete the next batch if more users exist
+    if (listUsersResult.pageToken) {
+      await deleteAllUsers(listUsersResult.pageToken);
+    } else {
+      console.log("Finished deleting all users.");
+    }
+  } catch (error) {
+    console.error("Error deleting users:", error);
+  }
+}
+
+/**
+ * Delete ALL documents in the users Firestore collection (batched).
+ * Returns count of deleted documents.
+ *
+ * Note: This deletes Firestore docs only — it does NOT delete
+ * Firebase Auth users. Use deleteAllUsers() for that.
+ */
+async function deleteAllCustomers() {
+  const BATCH_SIZE = 500;
+  let totalDeleted = 0;
+
+  while (true) {
+    // Fetch a page of documents (only refs needed — no data read cost)
+    const snapshot = await db.collection(COLLECTION).limit(BATCH_SIZE).get();
+
+    if (snapshot.empty) break;
+
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+
+    totalDeleted += snapshot.size;
+    console.log(`Deleted ${totalDeleted} customers so far...`);
+
+    // If we got fewer than BATCH_SIZE, we've reached the end
+    if (snapshot.size < BATCH_SIZE) break;
+  }
+
+  console.log(`Finished. Deleted ${totalDeleted} customers total.`);
+  return { deleted: totalDeleted };
 }
 
 /**
@@ -197,4 +309,7 @@ module.exports = {
   deleteCustomer,
   downgradeAllPremiumCustomers,
   isSubscriptionExpired, // export in case you want to use it elsewhere
+  appendNewEmailsToCsv,
+  deleteAllUsers,
+  deleteAllCustomers,
 };
